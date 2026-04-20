@@ -4,9 +4,6 @@ tuidger
 # claude code
 .claude/
 
-# internal planning
-plan.md
-
 # database
 *.db
 *.db-shm
