@@ -46,12 +46,11 @@ jobs:
       - name: Build .deb
         env:
           VERSION: ${{ github.ref_name }}
+          ARCH: ${{ matrix.nfpm_arch }}
         run: |
           cp tuidger_linux_${{ matrix.goarch }} tuidger
-          VERSION=${VERSION} ARCH=${{ matrix.nfpm_arch }} \
-            nfpm package --packager deb \
-              --target dist/ \
-              --config packaging/nfpm.yaml
+          mkdir -p dist
+          nfpm package --packager deb --target dist --config packaging/nfpm.yaml
           rm tuidger
 
       - name: Upload artifacts

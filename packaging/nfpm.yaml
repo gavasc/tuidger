@@ -1,5 +1,5 @@
 name: tuidger
-arch: amd64
+arch: "${ARCH}"
 platform: linux
 version: "${VERSION}"
 maintainer: Gabriel Vasconcelos <gavasc@proton.me>

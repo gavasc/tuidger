@@ -22,7 +22,7 @@ dist:
 	mkdir -p dist/
 
 package-deb: dist build
-	VERSION=$(VERSION) nfpm package --packager deb --target dist/ --config packaging/nfpm.yaml
+	VERSION=$(VERSION) ARCH=amd64 nfpm package --packager deb --target dist --config packaging/nfpm.yaml
 
 package-arch: dist build
-	VERSION=$(VERSION) nfpm package --packager archlinux --target dist/ --config packaging/nfpm.yaml
+	VERSION=$(VERSION) ARCH=amd64 nfpm package --packager archlinux --target dist --config packaging/nfpm.yaml
