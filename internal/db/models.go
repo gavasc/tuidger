@@ -25,9 +25,10 @@ type Installment struct {
 }
 
 type Account struct {
-	ID             *int64
-	Name           string
-	InitialBalance float64
+	ID             *int64  `json:"id"`
+	Name           string  `json:"name"`
+	InitialBalance float64 `json:"initial_balance"`
+	CurrentBalance float64 `json:"current_balance,omitempty"`
 }
 
 type AccountBalance struct {

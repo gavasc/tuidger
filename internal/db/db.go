@@ -419,14 +419,22 @@ func (d *DB) collectAll() (exportData, error) {
 		data.Transactions = append(data.Transactions, t)
 	}
 
-	accs, err := d.conn.Query(`SELECT id,name,initial_balance FROM accounts ORDER BY name`)
+	accs, err := d.conn.Query(`
+		SELECT a.id, a.name, a.initial_balance,
+		  a.initial_balance
+		  + COALESCE((SELECT SUM(amount) FROM transfers WHERE to_account_id   = a.id), 0)
+		  - COALESCE((SELECT SUM(amount) FROM transfers WHERE from_account_id = a.id), 0)
+		  + COALESCE((SELECT SUM(val)    FROM transactions WHERE account_id = a.id AND type='revenue'), 0)
+		  - COALESCE((SELECT SUM(val)    FROM transactions WHERE account_id = a.id AND type='expense'), 0)
+		  AS current_balance
+		FROM accounts a ORDER BY a.name`)
 	if err != nil {
 		return data, err
 	}
 	defer accs.Close()
 	for accs.Next() {
 		var a Account
-		accs.Scan(&a.ID, &a.Name, &a.InitialBalance)
+		accs.Scan(&a.ID, &a.Name, &a.InitialBalance, &a.CurrentBalance)
 		data.Accounts = append(data.Accounts, a)
 	}
 
