@@ -9,6 +9,9 @@ tuidger
 *.db-shm
 *.db-wal
 
+# internal planning
+plans/
+
 # packaging output
 dist/
 
