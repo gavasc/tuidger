@@ -85,21 +85,70 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update PKGBUILD version
+      - name: Compute tarball checksum
+        id: meta
         env:
           VERSION: ${{ github.ref_name }}
         run: |
           PKGVER=${VERSION#v}
+          SHA256=$(curl -sSfL "https://github.com/gavasc/tuidger/archive/${VERSION}.tar.gz" \
+            | sha256sum | cut -d' ' -f1)
+          echo "pkgver=${PKGVER}" >> $GITHUB_OUTPUT
+          echo "sha256=${SHA256}" >> $GITHUB_OUTPUT
+
+      - name: Update PKGBUILD
+        env:
+          PKGVER: ${{ steps.meta.outputs.pkgver }}
+          SHA256: ${{ steps.meta.outputs.sha256 }}
+        run: |
           sed -i "s/^pkgver=.*/pkgver=${PKGVER}/" packaging/PKGBUILD
           sed -i "s/^pkgrel=.*/pkgrel=1/" packaging/PKGBUILD
+          sed -i "s/sha256sums=.*/sha256sums=('${SHA256}')/" packaging/PKGBUILD
+
+      - name: Generate .SRCINFO
+        env:
+          PKGVER: ${{ steps.meta.outputs.pkgver }}
+          SHA256: ${{ steps.meta.outputs.sha256 }}
+        run: |
+          {
+            printf 'pkgbase = tuidger\n'
+            printf '\tpkgdesc = Terminal personal finance manager\n'
+            printf '\tpkgver = %s\n'    "${PKGVER}"
+            printf '\tpkgrel = 1\n'
+            printf '\turl = https://github.com/gavasc/tuidger\n'
+            printf '\tarch = x86_64\n'
+            printf '\tarch = aarch64\n'
+            printf '\tlicense = MIT\n'
+            printf '\tmakedepends = go\n'
+            printf '\tsource = tuidger-%s.tar.gz::https://github.com/gavasc/tuidger/archive/v%s.tar.gz\n' \
+              "${PKGVER}" "${PKGVER}"
+            printf '\tsha256sums = %s\n' "${SHA256}"
+            printf '\n'
+            printf 'pkgname = tuidger\n'
+            printf '\tpkgdesc = Terminal personal finance manager\n'
+          } > /tmp/.SRCINFO
 
       - name: Push to AUR
-        uses: KSXGitHub/github-actions-deploy-aur@v3.0.2
-        with:
-          pkgname: tuidger
-          pkgbuild: ./packaging/PKGBUILD
-          commit_username: gavasc
-          commit_email: gavasc@proton.me
-          ssh_private_key: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
-          commit_message: "Update to ${{ github.ref_name }}"
-          updpkgsums: true
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 600 ~/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+
+          git config --global user.name "gavasc"
+          git config --global user.email "gavasc@proton.me"
+
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" \
+            git clone ssh://aur@aur.archlinux.org/tuidger.git /tmp/aur
+
+          cp packaging/PKGBUILD /tmp/aur/PKGBUILD
+          cp /tmp/.SRCINFO /tmp/aur/.SRCINFO
+
+          cd /tmp/aur
+          git add PKGBUILD .SRCINFO
+          git diff --cached --quiet && echo "Nothing to update" && exit 0
+          git commit -m "Update to ${VERSION}"
+          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push
