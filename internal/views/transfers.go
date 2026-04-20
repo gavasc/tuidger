@@ -64,6 +64,18 @@ func (m *TransfersModel) OnTransfersLoaded(msg TransfersLoadedMsg) {
 	m.pag.SetTotalPages(len(m.transfers))
 }
 
+func (m TransfersModel) Capturing() bool { return m.mode != transfersModeList }
+
+func (m TransfersModel) Hints() string {
+	switch m.mode {
+	case transfersModeAdd:
+		return "Tab next field  Enter submit  Esc cancel"
+	case transfersModeDelete:
+		return "y confirm  n cancel"
+	}
+	return "[n] new  [d] delete  [↑/↓] navigate  [←/→] page"
+}
+
 func (m TransfersModel) Update(msg tea.Msg) (TransfersModel, tea.Cmd) {
 	switch m.mode {
 	case transfersModeAdd:
@@ -91,12 +103,12 @@ func (m TransfersModel) Update(msg tea.Msg) (TransfersModel, tea.Cmd) {
 				m.mode = transfersModeDelete
 			}
 			return m, nil
-		case "j":
+		case "j", "down":
 			start, end := m.pag.GetSliceBounds(len(m.transfers))
 			if m.cursor < end-start-1 {
 				m.cursor++
 			}
-		case "k":
+		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
@@ -177,45 +189,43 @@ func (m TransfersModel) updateDelete(msg tea.Msg) (TransfersModel, tea.Cmd) {
 }
 
 func (m TransfersModel) View() string {
-	if m.mode == transfersModeAdd {
-		return m.addForm.View()
-	}
-
 	var sb strings.Builder
-	sb.WriteString(styles.Faint.Render("[n] New  [d] Delete  [j/k] Navigate  [n/p] Page") + "\n\n")
 
 	if len(m.transfers) == 0 {
 		sb.WriteString(styles.Faint.Render("No transfers yet. Press [n] to create one.") + "\n")
-		return sb.String()
+	} else {
+		start, end := m.pag.GetSliceBounds(len(m.transfers))
+		page := m.transfers[start:end]
+		for i, tr := range page {
+			prefix := "  "
+			if i == m.cursor {
+				prefix = "▶ "
+			}
+			from, to := "", ""
+			if tr.FromAccountName != nil {
+				from = *tr.FromAccountName
+			}
+			if tr.ToAccountName != nil {
+				to = *tr.ToAccountName
+			}
+			sb.WriteString(fmt.Sprintf("%s%s  %-14s → %-14s  %s  %s\n",
+				prefix,
+				styles.Faint.Render(format.DateDisplay(tr.Date)),
+				truncate(from, 14),
+				truncate(to, 14),
+				styles.RevenueText.Render(format.Currency(tr.Amount)),
+				styles.Faint.Render(tr.Desc),
+			))
+		}
+		sb.WriteString("\n" + m.pag.View())
 	}
+	bg := sb.String()
 
-	start, end := m.pag.GetSliceBounds(len(m.transfers))
-	page := m.transfers[start:end]
-	for i, tr := range page {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "▶ "
-		}
-		from, to := "", ""
-		if tr.FromAccountName != nil {
-			from = *tr.FromAccountName
-		}
-		if tr.ToAccountName != nil {
-			to = *tr.ToAccountName
-		}
-		line := fmt.Sprintf("%s%s  %-14s → %-14s  %s  %s",
-			prefix,
-			styles.Faint.Render(format.DateDisplay(tr.Date)),
-			truncate(from, 14),
-			truncate(to, 14),
-			styles.RevenueText.Render(format.Currency(tr.Amount)),
-			styles.Faint.Render(tr.Desc),
-		)
-		if m.mode == transfersModeDelete && i == m.cursor {
-			line += "\n" + m.confirm.View()
-		}
-		sb.WriteString(line + "\n")
+	switch m.mode {
+	case transfersModeAdd:
+		return components.RenderModal(m.addForm.View(), m.width, m.height)
+	case transfersModeDelete:
+		return components.RenderModal(m.confirm.View(), m.width, m.height)
 	}
-	sb.WriteString("\n" + m.pag.View())
-	return sb.String()
+	return bg
 }

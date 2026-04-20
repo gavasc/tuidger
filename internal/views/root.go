@@ -8,13 +8,14 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gavasc/tuidger/internal/backup"
+	"github.com/gavasc/tuidger/internal/components"
 	"github.com/gavasc/tuidger/internal/db"
 	"github.com/gavasc/tuidger/internal/styles"
 )
 
 const statusDuration = 3
 
-var tabNames = []string{"dashboard", "ledger", "accounts", "transfers", "installments", "notes", "backup", "export"}
+var tabNames = []string{"dashboard", "ledger", "accounts", "transfers", "installments", "backup"}
 
 type RootModel struct {
 	db           *db.DB
@@ -28,9 +29,8 @@ type RootModel struct {
 	accounts     AccountsModel
 	transfers    TransfersModel
 	installments InstallmentsModel
-	notes        NotesModel
 	backupTab    BackupTabModel
-	export       ExportModel
+	export       ExportModel // not a tab — lives in the bottom bar
 	statusMsg    string
 	statusErr    bool
 	statusTicks  int
@@ -41,9 +41,7 @@ type RootModel struct {
 func NewRootModel(d *db.DB, bm *backup.BackupManager) RootModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-
 	period := NewPeriodModel()
-
 	return RootModel{
 		db:           d,
 		bm:           bm,
@@ -53,7 +51,6 @@ func NewRootModel(d *db.DB, bm *backup.BackupManager) RootModel {
 		accounts:     NewAccountsModel(d),
 		transfers:    NewTransfersModel(d),
 		installments: NewInstallmentsModel(d),
-		notes:        NewNotesModel(d),
 		backupTab:    NewBackupTabModel(d, bm),
 		export:       NewExportModel(d),
 		spinner:      sp,
@@ -78,15 +75,13 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		contentH := msg.Height - 3 // tab bar + period + status
+		contentH := msg.Height - 3 // tab bar + period + bottom bar
 		m.dashboard.SetSize(msg.Width, contentH)
 		m.ledger.SetSize(msg.Width, contentH)
 		m.accounts.SetSize(msg.Width, contentH)
 		m.transfers.SetSize(msg.Width, contentH)
 		m.installments.SetSize(msg.Width, contentH)
-		m.notes.SetSize(msg.Width, contentH)
 		m.backupTab.SetSize(msg.Width, contentH)
-		m.export.SetSize(msg.Width, contentH)
 		return m, nil
 
 	case spinner.TickMsg:
@@ -125,9 +120,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.dashboard.OnAccountsLoaded(msg)
 		m.accounts.OnAccountsLoaded(msg)
 		m.transfers.OnAccountsLoaded(msg)
-		m.installments.Update(msg)
-		// pass to ledger for edit-form account dropdown
-		m.ledger.Update(msg)
+		m.installments, _ = m.installments.Update(msg)
+		m.ledger, _ = m.ledger.Update(msg)
 		return m, nil
 
 	case TransfersLoadedMsg:
@@ -138,17 +132,11 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.installments.OnInstallmentsLoaded(msg)
 		return m, nil
 
-	case NoteLoadedMsg:
-		m.notes.OnNoteLoaded(msg)
-		return m, nil
-
 	case PeriodChangedMsg:
 		m.period.From = msg.From
 		m.period.To = msg.To
 		m.loading = true
-		return m, tea.Batch(
-			loadTransactions(m.db, msg.From, msg.To),
-		)
+		return m, loadTransactions(m.db, msg.From, msg.To)
 
 	case InsertDoneMsg:
 		if msg.Err != nil {
@@ -211,6 +199,8 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case ExportDoneMsg:
+		var cmd tea.Cmd
+		m.export, cmd = m.export.OnExportDone(msg)
 		if msg.Err != nil {
 			m.statusMsg = "Export failed: " + msg.Err.Error()
 			m.statusErr = true
@@ -218,8 +208,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = "Exported to " + msg.Path
 		}
 		m.statusTicks = statusDuration
-		var cmd tea.Cmd
-		m.export, cmd = m.export.OnExportDone(msg)
 		return m, cmd
 
 	case tea.KeyMsg:
@@ -234,38 +222,62 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 
-		// Tab switching via number keys (only when not in a form)
+		// Export modal captures all keys when active
+		if m.export.Capturing() {
+			var cmd tea.Cmd
+			m.export, cmd = m.export.Update(msg)
+			return m, cmd
+		}
+
+		// Period modal captures all keys when active (digits 1-6 must reach the
+		// date inputs, not switch tabs)
+		if m.period.ModalActive() {
+			var cmd tea.Cmd
+			m.period, cmd = m.period.Update(msg)
+			return m, cmd
+		}
+
+		// Tab switching + export trigger when nothing else captures
 		if !m.activeTabCaptures() {
+			switched := true
 			switch msg.String() {
 			case "1":
 				m.activeTab = 0
-				return m, m.onTabSwitch()
 			case "2":
 				m.activeTab = 1
-				return m, m.onTabSwitch()
 			case "3":
 				m.activeTab = 2
-				return m, m.onTabSwitch()
 			case "4":
 				m.activeTab = 3
-				return m, m.onTabSwitch()
 			case "5":
 				m.activeTab = 4
-				return m, m.onTabSwitch()
 			case "6":
 				m.activeTab = 5
-				return m, m.onTabSwitch()
-			case "7":
-				m.activeTab = 6
-				return m, m.onTabSwitch()
-			case "8":
-				m.activeTab = 7
-				return m, m.onTabSwitch()
+			case "left", "h":
+				if m.activeTab > 0 {
+					m.activeTab--
+				}
+			case "right", "l":
+				if m.activeTab < len(tabNames)-1 {
+					m.activeTab++
+				}
+			// Export shortcuts live in the bottom bar
+			case "j":
+				var cmd tea.Cmd
+				m.export, cmd = m.export.Update(msg)
+				return m, cmd
+			case "c":
+				var cmd tea.Cmd
+				m.export, cmd = m.export.Update(msg)
+				return m, cmd
+			default:
+				switched = false
 			}
-		}
+			if switched {
+				return m, nil
+			}
 
-		// Period selector gets tab/shift+tab keys only when no active tab captures
-		if !m.activeTabCaptures() {
+			// Forward remaining keys to period selector
 			var pCmd tea.Cmd
 			m.period, pCmd = m.period.Update(msg)
 			if pCmd != nil {
@@ -288,11 +300,7 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case 4:
 		m.installments, cmd = m.installments.Update(msg)
 	case 5:
-		m.notes, cmd = m.notes.Update(msg)
-	case 6:
 		m.backupTab, cmd = m.backupTab.Update(msg)
-	case 7:
-		m.export, cmd = m.export.Update(msg)
 	}
 	return m, cmd
 }
@@ -303,12 +311,14 @@ func (m *RootModel) activeTabCaptures() bool {
 		return m.dashboard.Capturing()
 	case 1:
 		return m.ledger.Capturing()
+	case 2:
+		return m.accounts.Capturing()
+	case 3:
+		return m.transfers.Capturing()
+	case 4:
+		return m.installments.Capturing()
 	case 5:
-		return m.notes.Capturing()
-	case 6:
 		return m.backupTab.Capturing()
-	case 7:
-		return m.export.Capturing()
 	}
 	return false
 }
@@ -322,29 +332,14 @@ func (m RootModel) reloadAll() tea.Cmd {
 	)
 }
 
-func (m RootModel) onTabSwitch() tea.Cmd {
-	switch m.activeTab {
-	case 5:
-		return tea.Batch(
-			loadNote(m.db, "expenses", m.period.From, m.period.To),
-			loadNote(m.db, "revenues", m.period.From, m.period.To),
-		)
-	}
-	return nil
-}
-
 func (m RootModel) View() string {
 	if m.width == 0 {
 		return "Loading…"
 	}
 
-	// Tab bar
 	tabBar := m.renderTabBar()
-
-	// Period selector
 	periodBar := m.period.View()
 
-	// Content
 	var content string
 	switch m.activeTab {
 	case 0:
@@ -358,24 +353,26 @@ func (m RootModel) View() string {
 	case 4:
 		content = m.installments.View()
 	case 5:
-		content = m.notes.View()
-	case 6:
 		content = m.backupTab.View()
-	case 7:
-		content = m.export.View()
 	}
 
-	// Status bar
-	status := m.renderStatus()
+	bottom := m.renderBottom()
+	base := strings.Join([]string{tabBar, periodBar, content, bottom}, "\n")
 
-	return strings.Join([]string{tabBar, periodBar, content, status}, "\n")
+	// Root-level modal overlays (cover full screen)
+	if m.period.ModalActive() {
+		return components.RenderModal(m.period.ModalView(), m.width, m.height)
+	}
+	if m.export.Capturing() {
+		return components.RenderModal(m.export.ModalView(), m.width, m.height)
+	}
+	return base
 }
 
 func (m RootModel) renderTabBar() string {
 	var parts []string
 	for i, name := range tabNames {
-		num := fmt.Sprintf("%d", i+1)
-		label := fmt.Sprintf("[%s] %s", num, name)
+		label := fmt.Sprintf("[%d] %s", i+1, name)
 		if i == m.activeTab {
 			parts = append(parts, styles.TabActive.Render(label))
 		} else {
@@ -389,16 +386,40 @@ func (m RootModel) renderTabBar() string {
 	return bar
 }
 
-func (m RootModel) renderStatus() string {
-	if m.statusMsg == "" {
-		return styles.Faint.Render("ctrl+c quit  1-8 tabs  1m/3m/6m/1y period")
+func (m RootModel) activeHints() string {
+	switch m.activeTab {
+	case 0:
+		return m.dashboard.Hints()
+	case 1:
+		return m.ledger.Hints()
+	case 2:
+		return m.accounts.Hints()
+	case 3:
+		return m.transfers.Hints()
+	case 4:
+		return m.installments.Hints()
+	case 5:
+		return m.backupTab.Hints()
 	}
-	if m.statusErr {
-		return lipgloss.NewStyle().Foreground(styles.ColorError).Render("✗ " + m.statusMsg)
-	}
-	return lipgloss.NewStyle().Foreground(styles.ColorSuccess).Render("✓ " + m.statusMsg)
+	return ""
 }
 
-// PeriodFrom / PeriodTo expose the current period to external callers.
+func (m RootModel) renderBottom() string {
+	sep := styles.Faint.Render("  |  ")
+	nav := styles.Faint.Render("←/→ tabs  ↑/↓ navigate  Ctrl+C quit")
+	exportHints := styles.Faint.Render("[j] export JSON  [c] export CSV")
+
+	left := styles.Faint.Render(m.activeHints())
+	if m.statusMsg != "" {
+		if m.statusErr {
+			left = lipgloss.NewStyle().Foreground(styles.ColorError).Render("✗ " + m.statusMsg)
+		} else {
+			left = lipgloss.NewStyle().Foreground(styles.ColorSuccess).Render("✓ " + m.statusMsg)
+		}
+	}
+
+	return left + sep + exportHints + sep + nav
+}
+
 func (m *RootModel) PeriodFrom() string { return m.period.From }
 func (m *RootModel) PeriodTo() string   { return m.period.To }

@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/bubbles/paginator"
-	"github.com/charmbracelet/bubbles/table"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/gavasc/tuidger/internal/components"
@@ -14,7 +13,17 @@ import (
 	"github.com/gavasc/tuidger/internal/styles"
 )
 
-const ledgerPageSize = 15
+const ledgerPageSize = 40
+
+// column widths for the custom renderer
+const (
+	colDate    = 12
+	colType    = 9
+	colDesc    = 26
+	colCat     = 14
+	colAmount  = 14
+	colAccount = 14
+)
 
 type ledgerMode int
 
@@ -30,9 +39,9 @@ type LedgerModel struct {
 	filtered []db.Transaction
 	accounts []db.Account
 	mode     ledgerMode
-	table    table.Model
 	pag      paginator.Model
 	filter   string
+	cursor   int
 	editID   int64
 	editForm components.FormModel
 	confirm  components.ConfirmModel
@@ -45,24 +54,6 @@ func NewLedgerModel(d *db.DB) LedgerModel {
 	p.Type = paginator.Dots
 	p.PerPage = ledgerPageSize
 
-	cols := []table.Column{
-		{Title: "Date", Width: 12},
-		{Title: "Type", Width: 9},
-		{Title: "Description", Width: 28},
-		{Title: "Category", Width: 16},
-		{Title: "Amount", Width: 14},
-		{Title: "Account", Width: 14},
-	}
-	t := table.New(
-		table.WithColumns(cols),
-		table.WithFocused(true),
-		table.WithHeight(ledgerPageSize),
-	)
-	ts := table.DefaultStyles()
-	ts.Header = ts.Header.BorderStyle(lipgloss.NormalBorder()).BorderForeground(lipgloss.Color("#555555")).Bold(true)
-	ts.Selected = ts.Selected.Foreground(lipgloss.Color("#ffffff")).Background(lipgloss.Color("#4a90d9"))
-	t.SetStyles(ts)
-
 	f := components.NewForm("Edit Transaction", "Enter → Save")
 	f.AddSelectField("Type", []string{"expense", "revenue"}, true)
 	f.AddTextField("Description", true)
@@ -71,26 +62,18 @@ func NewLedgerModel(d *db.DB) LedgerModel {
 	f.AddDateField("Date", true)
 	f.AddSelectField("Account", []string{}, false)
 
-	return LedgerModel{
-		d:        d,
-		table:    t,
-		pag:      p,
-		editForm: f,
-	}
+	return LedgerModel{d: d, pag: p, editForm: f}
 }
 
 func (m *LedgerModel) SetSize(w, h int) {
 	m.width = w
 	m.height = h
-	m.table.SetHeight(h - 5)
-	m.refreshTable()
 }
 
 func (m LedgerModel) OnTransactionsLoaded(msg TransactionsLoadedMsg) (LedgerModel, tea.Cmd) {
 	m.allTxns = msg.Txns
 	m.applyFilter()
 	m.pag.SetTotalPages(len(m.filtered))
-	m.refreshTable()
 	return m, nil
 }
 
@@ -109,31 +92,17 @@ func (m *LedgerModel) applyFilter() {
 	}
 }
 
-func (m *LedgerModel) refreshTable() {
-	start, end := m.pag.GetSliceBounds(len(m.filtered))
-	page := m.filtered[start:end]
-	rows := make([]table.Row, len(page))
-	for i, t := range page {
-		accName := ""
-		if t.AccountID != nil {
-			for _, a := range m.accounts {
-				if *a.ID == *t.AccountID {
-					accName = a.Name
-				}
-			}
-		}
-		var valStr string
-		if t.Type == "expense" {
-			valStr = "-" + format.Currency(t.Val)
-		} else {
-			valStr = "+" + format.Currency(t.Val)
-		}
-		rows[i] = table.Row{format.DateDisplay(t.Date), t.Type, truncate(t.Desc, 28), truncate(t.Cat, 16), valStr, accName}
-	}
-	m.table.SetRows(rows)
-}
-
 func (m LedgerModel) Capturing() bool { return m.mode != ledgerModeList }
+
+func (m LedgerModel) Hints() string {
+	switch m.mode {
+	case ledgerModeEdit:
+		return "Tab next field  Enter save  Esc cancel"
+	case ledgerModeDelete:
+		return "y confirm  n cancel"
+	}
+	return "[e] edit  [d] delete  [n] next page  [p] prev page"
+}
 
 func (m LedgerModel) Update(msg tea.Msg) (LedgerModel, tea.Cmd) {
 	switch m.mode {
@@ -157,37 +126,39 @@ func (m LedgerModel) Update(msg tea.Msg) (LedgerModel, tea.Cmd) {
 			return m.startEdit()
 		case "d":
 			return m.startDelete()
+		case "j", "down":
+			start, end := m.pag.GetSliceBounds(len(m.filtered))
+			if m.cursor < end-start-1 {
+				m.cursor++
+			}
+		case "k", "up":
+			if m.cursor > 0 {
+				m.cursor--
+			}
 		case "n":
 			m.pag.NextPage()
-			m.refreshTable()
+			m.cursor = 0
 		case "p":
 			m.pag.PrevPage()
-			m.refreshTable()
+			m.cursor = 0
 		case "/":
-			// toggle filter (simplified: clear or re-enter — full filter input omitted for brevity)
 			m.filter = ""
 			m.applyFilter()
-			m.refreshTable()
+			m.pag.SetTotalPages(len(m.filtered))
 		}
 	}
-
-	var cmd tea.Cmd
-	m.table, cmd = m.table.Update(msg)
-	return m, cmd
+	return m, nil
 }
 
 func (m LedgerModel) startEdit() (LedgerModel, tea.Cmd) {
-	idx := m.table.Cursor()
 	start, end := m.pag.GetSliceBounds(len(m.filtered))
 	page := m.filtered[start:end]
-	if idx >= len(page) {
+	if m.cursor >= len(page) {
 		return m, nil
 	}
-	t := page[idx]
+	t := page[m.cursor]
 	m.editID = *t.ID
 	m.editForm.Reset()
-
-	// set type
 	for i, opt := range m.editForm.Fields[0].Options {
 		if opt == t.Type {
 			m.editForm.Fields[0].SelectedIdx = i
@@ -210,13 +181,12 @@ func (m LedgerModel) startEdit() (LedgerModel, tea.Cmd) {
 }
 
 func (m LedgerModel) startDelete() (LedgerModel, tea.Cmd) {
-	idx := m.table.Cursor()
 	start, end := m.pag.GetSliceBounds(len(m.filtered))
 	page := m.filtered[start:end]
-	if idx >= len(page) {
+	if m.cursor >= len(page) {
 		return m, nil
 	}
-	t := page[idx]
+	t := page[m.cursor]
 	m.editID = *t.ID
 	m.confirm = components.NewConfirm(*t.ID, fmt.Sprintf("Delete '%s' on %s?", t.Desc, format.DateDisplay(t.Date)))
 	m.mode = ledgerModeDelete
@@ -279,21 +249,82 @@ func (m LedgerModel) updateDelete(msg tea.Msg) (LedgerModel, tea.Cmd) {
 }
 
 func (m LedgerModel) View() string {
-	switch m.mode {
-	case ledgerModeEdit:
-		return m.editForm.View()
-	case ledgerModeDelete:
-		return m.table.View() + "\n" + m.confirm.View()
-	}
-
 	var sb strings.Builder
-	sb.WriteString(styles.Faint.Render(fmt.Sprintf("%d transactions  ", len(m.filtered))))
-	sb.WriteString(styles.Faint.Render("[e] edit  [d] delete  [n/p] page") + "\n")
+	sb.WriteString(styles.Faint.Render(fmt.Sprintf("%d transactions", len(m.filtered))) + "\n")
+
 	if len(m.filtered) == 0 {
 		sb.WriteString(styles.Faint.Render("No transactions in this period."))
-		return sb.String()
+		bg := sb.String()
+		switch m.mode {
+		case ledgerModeEdit:
+			return components.RenderModal(m.editForm.View(), m.width, m.height)
+		case ledgerModeDelete:
+			return components.RenderModal(m.confirm.View(), m.width, m.height)
+		}
+		return bg
 	}
-	sb.WriteString(m.table.View() + "\n")
-	sb.WriteString(m.pag.View())
-	return sb.String()
+
+	// Header row — plain text, no ANSI colour so fmt widths are accurate
+	header := fmt.Sprintf("  %-*s %-*s %-*s %-*s %-*s %s",
+		colDate, "Date",
+		colType, "Type",
+		colDesc, "Description",
+		colCat, "Category",
+		colAmount, "Amount",
+		"Account",
+	)
+	sb.WriteString(styles.Faint.Render(header) + "\n")
+	if m.width > 2 {
+		sb.WriteString(styles.Faint.Render(strings.Repeat("─", m.width-2)) + "\n")
+	}
+
+	start, end := m.pag.GetSliceBounds(len(m.filtered))
+	page := m.filtered[start:end]
+
+	for i, t := range page {
+		accName := ""
+		if t.AccountID != nil {
+			for _, a := range m.accounts {
+				if *a.ID == *t.AccountID {
+					accName = a.Name
+				}
+			}
+		}
+
+		// Pick colour and sign based on transaction type
+		txnStyle := lipgloss.NewStyle().Foreground(styles.ColorExpense)
+		sign := "-"
+		if t.Type == "revenue" {
+			txnStyle = lipgloss.NewStyle().Foreground(styles.ColorRevenue)
+			sign = "+"
+		}
+
+		prefix := "  "
+		if i == m.cursor {
+			prefix = lipgloss.NewStyle().Foreground(styles.ColorAccent).Render("▶") + " "
+		}
+
+		// Each cell: plain cells use fmt padding (safe for ASCII); coloured cells
+		// use lipgloss.Width() which is ANSI-aware and produces exact visual width.
+		line := prefix +
+			fmt.Sprintf("%-*s ", colDate, format.DateDisplay(t.Date)) +
+			txnStyle.Width(colType).Render(t.Type) + " " +
+			fmt.Sprintf("%-*s ", colDesc, truncate(t.Desc, colDesc)) +
+			fmt.Sprintf("%-*s ", colCat, truncate(t.Cat, colCat)) +
+			txnStyle.Width(colAmount).Render(sign+format.Currency(t.Val)) + " " +
+			truncate(accName, colAccount)
+
+		sb.WriteString(line + "\n")
+	}
+
+	sb.WriteString("\n" + m.pag.View())
+	bg := sb.String()
+
+	switch m.mode {
+	case ledgerModeEdit:
+		return components.RenderModal(m.editForm.View(), m.width, m.height)
+	case ledgerModeDelete:
+		return components.RenderModal(m.confirm.View(), m.width, m.height)
+	}
+	return bg
 }

@@ -46,6 +46,18 @@ func (m *AccountsModel) OnAccountsLoaded(msg AccountsLoadedMsg) {
 	}
 }
 
+func (m AccountsModel) Capturing() bool { return m.mode != accountsModeList }
+
+func (m AccountsModel) Hints() string {
+	switch m.mode {
+	case accountsModeAdd:
+		return "Tab next field  Enter create  Esc cancel"
+	case accountsModeDelete:
+		return "y confirm  n cancel"
+	}
+	return "[n] new  [d] delete  [↑/↓] navigate"
+}
+
 func (m AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
 	switch m.mode {
 	case accountsModeAdd:
@@ -68,11 +80,11 @@ func (m AccountsModel) Update(msg tea.Msg) (AccountsModel, tea.Cmd) {
 				m.mode = accountsModeDelete
 			}
 			return m, nil
-		case "j":
+		case "j", "down":
 			if m.cursor < len(m.balances)-1 {
 				m.cursor++
 			}
-		case "k":
+		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
@@ -127,45 +139,42 @@ func callCmd(cmd tea.Cmd) tea.Msg {
 }
 
 func (m AccountsModel) View() string {
-	if m.mode == accountsModeAdd {
-		return m.addForm.View()
-	}
-
 	var sb strings.Builder
-	sb.WriteString(styles.Faint.Render("[n] New  [d] Delete  [j/k] Navigate") + "\n\n")
 
 	if len(m.balances) == 0 {
 		sb.WriteString(styles.Faint.Render("No accounts yet. Press [n] to create one.") + "\n")
-		return sb.String()
-	}
-
-	var total float64
-	for i, ab := range m.balances {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "▶ "
-		}
-		balStr := format.Currency(ab.Balance)
-		if ab.Balance >= 0 {
-			balStr = styles.RevenueText.Render(balStr)
-		} else {
-			balStr = styles.ExpenseText.Render(balStr)
-		}
-		line := fmt.Sprintf("%s%-30s %s", prefix, ab.Name, balStr)
-		if m.mode == accountsModeDelete && i == m.cursor {
-			line += "  " + m.confirm.View()
-		}
-		sb.WriteString(line + "\n")
-		total += ab.Balance
-	}
-
-	sb.WriteString("\n")
-	totalStr := format.Currency(total)
-	if total >= 0 {
-		totalStr = styles.RevenueText.Render("Total: " + totalStr)
 	} else {
-		totalStr = styles.ExpenseText.Render("Total: " + totalStr)
+		var total float64
+		for i, ab := range m.balances {
+			prefix := "  "
+			if i == m.cursor {
+				prefix = "▶ "
+			}
+			balStr := format.Currency(ab.Balance)
+			if ab.Balance >= 0 {
+				balStr = styles.RevenueText.Render(balStr)
+			} else {
+				balStr = styles.ExpenseText.Render(balStr)
+			}
+			sb.WriteString(fmt.Sprintf("%s%-30s %s\n", prefix, ab.Name, balStr))
+			total += ab.Balance
+		}
+		sb.WriteString("\n")
+		totalStr := format.Currency(total)
+		if total >= 0 {
+			totalStr = styles.RevenueText.Render("Total: " + totalStr)
+		} else {
+			totalStr = styles.ExpenseText.Render("Total: " + totalStr)
+		}
+		sb.WriteString("  " + totalStr + "\n")
 	}
-	sb.WriteString("  " + totalStr + "\n")
-	return sb.String()
+	bg := sb.String()
+
+	switch m.mode {
+	case accountsModeAdd:
+		return components.RenderModal(m.addForm.View(), m.width, m.height)
+	case accountsModeDelete:
+		return components.RenderModal(m.confirm.View(), m.width, m.height)
+	}
+	return bg
 }

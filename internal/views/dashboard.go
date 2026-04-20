@@ -2,6 +2,7 @@ package views
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/viewport"
@@ -25,6 +26,7 @@ type DashboardModel struct {
 	d        *db.DB
 	txns     []db.Transaction
 	accounts []db.Account
+	balances []db.AccountBalance
 	mode     addMode
 	expForm  components.FormModel
 	revForm  components.FormModel
@@ -81,10 +83,18 @@ func (m DashboardModel) OnTransactionsLoaded(msg TransactionsLoadedMsg) (Dashboa
 
 func (m *DashboardModel) OnAccountsLoaded(msg AccountsLoadedMsg) {
 	m.accounts = msg.Accounts
+	m.balances = msg.Balances
 	m.updateAccounts(msg.Accounts)
 }
 
 func (m DashboardModel) Capturing() bool { return m.mode != addModeNone }
+
+func (m DashboardModel) Hints() string {
+	if m.mode != addModeNone {
+		return "Tab next field  Enter submit  Esc cancel"
+	}
+	return "[e] add expense  [r] add revenue  [↑/↓] scroll"
+}
 
 func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 	if m.mode != addModeNone {
@@ -101,6 +111,9 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			if len(m.accounts) > 0 {
 				m.expForm.Fields[4].Options = accountNames(m.accounts)
 			}
+			// Installment fields start hidden; updateForm reveals them when toggle is on.
+			m.expForm.Fields[6].Hidden = true
+			m.expForm.Fields[7].Hidden = true
 			m.expForm.FocusFirst()
 			return m, nil
 		case "r":
@@ -110,11 +123,15 @@ func (m DashboardModel) Update(msg tea.Msg) (DashboardModel, tea.Cmd) {
 			if len(m.accounts) > 0 {
 				m.revForm.Fields[4].Options = accountNames(m.accounts)
 			}
+			// Installments don't apply to revenue — hide all three installment fields.
+			m.revForm.Fields[5].Hidden = true
+			m.revForm.Fields[6].Hidden = true
+			m.revForm.Fields[7].Hidden = true
 			m.revForm.FocusFirst()
 			return m, nil
-		case "j":
+		case "j", "down":
 			m.vp.LineDown(1)
-		case "k":
+		case "k", "up":
 			m.vp.LineUp(1)
 		}
 	}
@@ -213,20 +230,24 @@ func (m DashboardModel) submitForm() (DashboardModel, tea.Cmd) {
 }
 
 func (m DashboardModel) View() string {
-	if m.mode != addModeNone {
-		if m.mode == addModeExpense {
-			return m.expForm.View()
-		}
-		return m.revForm.View()
-	}
 	m.vp.SetContent(m.buildContent())
-	return m.vp.View()
+	bg := m.vp.View()
+	if m.mode != addModeNone {
+		var formContent string
+		if m.mode == addModeExpense {
+			formContent = m.expForm.View()
+		} else {
+			formContent = m.revForm.View()
+		}
+		return components.RenderModal(formContent, m.width, m.height)
+	}
+	return bg
 }
 
 func (m DashboardModel) buildContent() string {
 	var sb strings.Builder
 
-	// Totals
+	// ── Summary row + hint on the same line ──────────────────────────────────
 	var totalExp, totalRev float64
 	for _, t := range m.txns {
 		if t.Type == "expense" {
@@ -247,64 +268,122 @@ func (m DashboardModel) buildContent() string {
 	}
 	sb.WriteString(expStr + "   " + revStr + "   " + balStr + "\n\n")
 
-	// Quick-add hint
-	sb.WriteString(styles.Faint.Render("[e] Add Expense  [r] Add Revenue") + "\n\n")
+	// ── Recent 5 transactions + category charts side by side ─────────────────
+	halfW := m.width/2 - 2
 
-	// Recent 4 transactions
-	if len(m.txns) > 0 {
-		sb.WriteString(styles.Title.Render("Recent") + "\n")
-		n := 4
+	// left: recent transactions
+	var recentSB strings.Builder
+	recentSB.WriteString(styles.Title.Render("Recent") + "\n")
+	if len(m.txns) == 0 {
+		recentSB.WriteString(styles.Faint.Render("No transactions in this period.") + "\n")
+	} else {
+		n := 5
 		if len(m.txns) < n {
 			n = len(m.txns)
 		}
 		for _, t := range m.txns[:n] {
 			var valStr string
 			if t.Type == "expense" {
-				valStr = styles.ExpenseText.Render(format.Currency(t.Val))
+				valStr = styles.ExpenseText.Render(fmt.Sprintf("%-16s", format.Currency(t.Val)))
 			} else {
-				valStr = styles.RevenueText.Render(format.Currency(t.Val))
+				valStr = styles.RevenueText.Render(fmt.Sprintf("%-16s", format.Currency(t.Val)))
 			}
-			sb.WriteString(fmt.Sprintf("  %s  %-28s  %s\n",
+			recentSB.WriteString(fmt.Sprintf("%s %s %s\n",
 				valStr,
-				truncate(t.Desc+" · "+t.Cat, 28),
+				truncate(t.Desc+" · "+t.Cat, 22),
 				styles.Faint.Render(format.DateDisplay(t.Date))))
 		}
-		sb.WriteString("\n")
-	} else {
-		sb.WriteString(styles.Faint.Render("No transactions in this period. Press [e] or [r] to add one.") + "\n\n")
 	}
 
-	// Category breakdown
+	// right: bar charts stacked
 	expCats := catBreakdown(m.txns, "expense")
 	revCats := catBreakdown(m.txns, "revenue")
-
-	halfW := m.width/2 - 2
 	expChart := components.RenderBarChart(expCats, halfW, "Expenses by Category")
 	revChart := components.RenderBarChart(revCats, halfW, "Revenues by Category")
+	rightCol := expChart + revChart
 
-	// side by side
-	expLines := strings.Split(expChart, "\n")
-	revLines := strings.Split(revChart, "\n")
-	maxLines := len(expLines)
-	if len(revLines) > maxLines {
-		maxLines = len(revLines)
+	// merge left and right column line by line
+	leftLines := strings.Split(recentSB.String(), "\n")
+	rightLines := strings.Split(rightCol, "\n")
+	maxLines := len(leftLines)
+	if len(rightLines) > maxLines {
+		maxLines = len(rightLines)
 	}
 	for i := 0; i < maxLines; i++ {
-		el, rl := "", ""
-		if i < len(expLines) {
-			el = expLines[i]
+		ll, rl := "", ""
+		if i < len(leftLines) {
+			ll = leftLines[i]
 		}
-		if i < len(revLines) {
-			rl = revLines[i]
+		if i < len(rightLines) {
+			rl = rightLines[i]
 		}
-		sb.WriteString(lipgloss.NewStyle().Width(halfW).Render(el) + "  " + rl + "\n")
+		sb.WriteString(lipgloss.NewStyle().Width(halfW).Render(ll) + "  " + rl + "\n")
+	}
+
+	// ── Line chart ────────────────────────────────────────────────────────────
+	expenses, revenues := dailyBuckets(m.txns)
+	chart := components.RenderLineChart(expenses, revenues, m.width-4, 4)
+	sb.WriteString(chart + "\n\n")
+
+	// ── Ledger preview ────────────────────────────────────────────────────────
+	sb.WriteString(styles.Title.Render("Ledger") + "\n")
+	if len(m.txns) == 0 {
+		sb.WriteString(styles.Faint.Render("No transactions in this period.") + "\n")
+	} else {
+		header := fmt.Sprintf("  %-12s %-10s %-28s %-16s %s",
+			"Date", "Type", "Description", "Category", "Amount")
+		sb.WriteString(styles.Faint.Render(header) + "\n")
+		if m.width > 2 {
+			sb.WriteString(styles.Faint.Render(strings.Repeat("─", m.width-2)) + "\n")
+		}
+		previewTxns := m.txns
+		if len(previewTxns) > 10 {
+			previewTxns = previewTxns[:10]
+		}
+		for _, t := range previewTxns {
+			var valStr string
+			if t.Type == "expense" {
+				valStr = styles.ExpenseText.Render(fmt.Sprintf("%-14s", "-"+format.Currency(t.Val)))
+			} else {
+				valStr = styles.RevenueText.Render(fmt.Sprintf("%-14s", "+"+format.Currency(t.Val)))
+			}
+			typeLabel := styles.Faint.Render(fmt.Sprintf("%-10s", t.Type))
+			sb.WriteString(fmt.Sprintf("  %s %s%-28s %-16s %s\n",
+				styles.Faint.Render(fmt.Sprintf("%-12s", format.DateDisplay(t.Date))),
+				typeLabel,
+				truncate(t.Desc, 28),
+				truncate(t.Cat, 16),
+				valStr,
+			))
+		}
 	}
 	sb.WriteString("\n")
 
-	// Line chart
-	expenses, revenues := dailyBuckets(m.txns)
-	chart := components.RenderLineChart(expenses, revenues, m.width-4, 8)
-	sb.WriteString(chart + "\n")
+	// ── Accounts ─────────────────────────────────────────────────────────────
+	sb.WriteString(styles.Title.Render("Accounts") + "\n")
+	if len(m.balances) == 0 {
+		sb.WriteString(styles.Faint.Render("No accounts yet.") + "\n")
+	} else {
+		var total float64
+		for _, ab := range m.balances {
+			balStr := format.Currency(ab.Balance)
+			if ab.Balance >= 0 {
+				balStr = styles.RevenueText.Render(balStr)
+			} else {
+				balStr = styles.ExpenseText.Render(balStr)
+			}
+			sb.WriteString(fmt.Sprintf("  %-30s %s\n", ab.Name, balStr))
+			total += ab.Balance
+		}
+		sb.WriteString(styles.Faint.Render(strings.Repeat("─", 44)) + "\n")
+		totalStr := format.Currency(total)
+		if total >= 0 {
+			totalStr = styles.RevenueText.Render("Total  " + totalStr)
+		} else {
+			totalStr = styles.ExpenseText.Render("Total  " + totalStr)
+		}
+		sb.WriteString("  " + totalStr + "\n")
+	}
 
 	return sb.String()
 }
@@ -334,6 +413,9 @@ func catBreakdown(txns []db.Transaction, txType string) []components.BarEntry {
 			Color: color,
 		})
 	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Value > entries[j].Value
+	})
 	return entries
 }
 

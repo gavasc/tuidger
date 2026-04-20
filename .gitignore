@@ -1,0 +1,23 @@
+# binary
+tuidger
+
+# claude code
+.claude/
+
+# internal planning
+plan.md
+
+# database
+*.db
+*.db-shm
+*.db-wal
+
+# go build cache
+*.test
+*.out
+
+# editor
+.vscode/
+.idea/
+*.swp
+*.swo

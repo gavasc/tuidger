@@ -14,6 +14,11 @@ func Currency(v float64) string {
 	v = math.Abs(v)
 	intPart := int64(v)
 	fracPart := int(math.Round((v - float64(intPart)) * 100))
+	// handle carry (e.g. 999.999 → fracPart=100 → intPart becomes 1000)
+	if fracPart >= 100 {
+		fracPart -= 100
+		intPart++
+	}
 
 	// format integer part with thousand separators using dots
 	s := fmt.Sprintf("%d", intPart)

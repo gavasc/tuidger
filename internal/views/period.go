@@ -20,15 +20,17 @@ const (
 	modeCustom
 )
 
+var presetModes = []periodMode{mode1m, mode3m, mode6m, mode1y}
 var modeNames = []string{"1m", "3m", "6m", "1y"}
 
 type PeriodModel struct {
-	mode      periodMode
-	From, To  string
-	fromInput textinput.Model
-	toInput   textinput.Model
+	mode        periodMode
+	editing     bool // true while the custom date modal is open
+	From, To    string
+	fromInput   textinput.Model
+	toInput     textinput.Model
 	customFocus int // 0 = from, 1 = to
-	err       string
+	err         string
 }
 
 func NewPeriodModel() PeriodModel {
@@ -44,9 +46,9 @@ func NewPeriodModel() PeriodModel {
 	ti.SetValue(to)
 
 	return PeriodModel{
-		mode: mode1m,
-		From: from,
-		To:   to,
+		mode:      mode1m,
+		From:      from,
+		To:        to,
 		fromInput: fi,
 		toInput:   ti,
 	}
@@ -55,38 +57,41 @@ func NewPeriodModel() PeriodModel {
 func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 	if key, ok := msg.(tea.KeyMsg); ok {
 		switch key.String() {
-		case "1":
-			if p.mode != modeCustom {
-				p.setMode(mode1m)
-				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
-			}
-		case "2":
-			if p.mode != modeCustom {
-				p.setMode(mode3m)
-				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
-			}
-		case "3":
-			if p.mode != modeCustom {
-				p.setMode(mode6m)
-				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
-			}
-		case "4":
-			if p.mode != modeCustom {
-				p.setMode(mode1y)
-				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
-			}
-		case "c":
-			if p.mode != modeCustom {
-				p.mode = modeCustom
-				p.fromInput.SetValue(p.From)
-				p.toInput.SetValue(p.To)
-				p.fromInput.Focus()
-				p.toInput.Blur()
-				p.customFocus = 0
+
+		// [ cycles backward through presets, ] cycles forward
+		case "[":
+			if p.mode == modeCustom {
 				return p, nil
 			}
-		case "tab":
+			idx := int(p.mode)
+			idx = (idx - 1 + len(presetModes)) % len(presetModes)
+			p.setMode(presetModes[idx])
+			return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
+
+		case "]":
 			if p.mode == modeCustom {
+				return p, nil
+			}
+			idx := int(p.mode)
+			idx = (idx + 1) % len(presetModes)
+			p.setMode(presetModes[idx])
+			return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
+
+
+		case "p":
+			// Open the custom date editor (re-open if already in custom mode)
+			p.mode = modeCustom
+			p.editing = true
+			p.fromInput.SetValue(p.From)
+			p.toInput.SetValue(p.To)
+			p.fromInput.Focus()
+			p.toInput.Blur()
+			p.customFocus = 0
+			p.err = ""
+			return p, nil
+
+		case "tab":
+			if p.editing {
 				if p.customFocus == 0 {
 					p.fromInput.Blur()
 					p.toInput.Focus()
@@ -98,12 +103,13 @@ func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 				}
 				return p, nil
 			}
+
 		case "enter":
-			if p.mode == modeCustom {
+			if p.editing {
 				from, err1 := format.ParseDate(p.fromInput.Value())
 				to, err2 := format.ParseDate(p.toInput.Value())
 				if err1 != nil || err2 != nil {
-					p.err = "Invalid date format (use YYYY-MM-DD)"
+					p.err = "Invalid date (use YYYY-MM-DD)"
 					return p, nil
 				}
 				if from > to {
@@ -113,18 +119,28 @@ func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 				p.err = ""
 				p.From = from
 				p.To = to
+				p.editing = false // close modal, stay in modeCustom
+				p.fromInput.Blur()
+				p.toInput.Blur()
 				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
 			}
+
 		case "esc":
-			if p.mode == modeCustom {
-				p.mode = mode1m
-				p.setMode(mode1m)
-				return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
+			if p.editing {
+				p.editing = false
+				p.fromInput.Blur()
+				p.toInput.Blur()
+				if p.mode == modeCustom && p.From == "" {
+					// Never applied a custom range — revert to 1m
+					p.setMode(mode1m)
+					return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
+				}
+				return p, nil
 			}
 		}
 	}
 
-	if p.mode == modeCustom {
+	if p.editing {
 		var cmd tea.Cmd
 		if p.customFocus == 0 {
 			p.fromInput, cmd = p.fromInput.Update(msg)
@@ -138,10 +154,37 @@ func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 
 func (p *PeriodModel) setMode(m periodMode) {
 	p.mode = m
-	names := []string{"1m", "3m", "6m", "1y"}
-	if int(m) < len(names) {
-		p.From, p.To = format.PeriodDates(names[m])
+	p.editing = false
+	if int(m) < len(modeNames) {
+		p.From, p.To = format.PeriodDates(modeNames[m])
 	}
+}
+
+// ModalActive reports whether the custom date picker modal should be shown.
+func (p PeriodModel) ModalActive() bool { return p.editing }
+
+// ModalView returns the content to render inside the custom date picker modal.
+func (p PeriodModel) ModalView() string {
+	// Do NOT wrap textinput.View() in any lipgloss Render() call — it strips
+	// the ESC byte from the cursor sequence, leaving "[7m [0m" as literal text.
+	// Focus is shown via the label colour instead.
+	fromLabel := styles.Faint.Render("From: ")
+	toLabel := styles.Faint.Render("To:   ")
+	if p.customFocus == 0 {
+		fromLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a90d9")).Bold(true).Render("From: ")
+	} else {
+		toLabel = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a90d9")).Bold(true).Render("To:   ")
+	}
+
+	var sb strings.Builder
+	sb.WriteString(styles.Title.Render("Custom Date Range") + "\n\n")
+	sb.WriteString(fromLabel + p.fromInput.View() + "\n")
+	sb.WriteString(toLabel + p.toInput.View() + "\n")
+	if p.err != "" {
+		sb.WriteString("\n" + styles.Error.Render(p.err) + "\n")
+	}
+	sb.WriteString("\n" + styles.Faint.Render("Tab switch  Enter apply  Esc cancel"))
+	return sb.String()
 }
 
 func (p PeriodModel) View() string {
@@ -151,33 +194,22 @@ func (p PeriodModel) View() string {
 			parts = append(parts, lipgloss.NewStyle().
 				Bold(true).
 				Foreground(lipgloss.Color("#4a90d9")).
-				Render("["+name+"]"))
+				Render(name))
 		} else {
-			parts = append(parts, styles.Faint.Render("["+name+"]"))
+			parts = append(parts, styles.Faint.Render(name))
 		}
-	}
-	if p.mode == modeCustom {
-		parts = append(parts, lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4a90d9")).Render("[c]"))
-	} else {
-		parts = append(parts, styles.Faint.Render("[c]"))
 	}
 
-	dateRange := ""
+	var modeLabel string
 	if p.mode == modeCustom {
-		fi := styles.Input.Render(p.fromInput.View())
-		ti := styles.Input.Render(p.toInput.View())
-		if p.customFocus == 0 {
-			fi = styles.InputFocus.Render(p.fromInput.View())
-		} else {
-			ti = styles.InputFocus.Render(p.toInput.View())
-		}
-		dateRange = fi + styles.Faint.Render(" → ") + ti
-		if p.err != "" {
-			dateRange += "  " + styles.Error.Render(p.err)
-		}
+		modeLabel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4a90d9")).Render("custom")
 	} else {
-		dateRange = styles.Faint.Render(p.From + " → " + p.To)
+		modeLabel = styles.Faint.Render("[p]custom")
 	}
 
-	return strings.Join(parts, " ") + "  " + dateRange
+	modeBar := strings.Join(parts, styles.Faint.Render(" | ")) + "  " + modeLabel
+	dateRange := styles.Faint.Render(p.From + " → " + p.To)
+
+	nav := styles.Faint.Render("[ ] cycle")
+	return nav + "  " + modeBar + "  " + dateRange
 }

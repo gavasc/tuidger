@@ -129,19 +129,21 @@ func (f *FormModel) absIndexOf(visIdx int) int {
 }
 
 func (f *FormModel) NextField() {
-	visIdx := f.visibleIndex(f.FocusIdx)
-	next := f.absIndexOf(visIdx + 1)
-	if next < len(f.Fields) {
-		f.Focus(next)
+	n := f.visibleCount()
+	if n == 0 {
+		return
 	}
+	visIdx := f.visibleIndex(f.FocusIdx)
+	f.Focus(f.absIndexOf((visIdx + 1) % n))
 }
 
 func (f *FormModel) PrevField() {
-	visIdx := f.visibleIndex(f.FocusIdx)
-	if visIdx > 0 {
-		prev := f.absIndexOf(visIdx - 1)
-		f.Focus(prev)
+	n := f.visibleCount()
+	if n == 0 {
+		return
 	}
+	visIdx := f.visibleIndex(f.FocusIdx)
+	f.Focus(f.absIndexOf((visIdx - 1 + n) % n))
 }
 
 func (f *FormModel) Update(msg tea.Msg) (FormModel, tea.Cmd) {
@@ -266,26 +268,32 @@ func (f *FormModel) View() string {
 	if f.Title != "" {
 		sb.WriteString(styles.Title.Render(f.Title) + "\n")
 	}
+
+	// Pre-compute the max label width (plain text) so all inputs start at the same column.
+	maxLabel := 0
+	for _, field := range f.Fields {
+		if field.Hidden || field.Type == FieldToggle {
+			continue
+		}
+		if w := len(field.Label) + 2; w > maxLabel { // +2 for ": "
+			maxLabel = w
+		}
+	}
+
 	for i, field := range f.Fields {
 		if field.Hidden {
 			continue
 		}
 		focused := i == f.FocusIdx
-		label := field.Label + ": "
-		if focused {
-			label = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a90d9")).Bold(true).Render(label)
-		} else {
-			label = styles.Faint.Render(label)
-		}
 
 		var valueStr string
 		switch field.Type {
 		case FieldText, FieldNumber, FieldDate:
-			s := styles.Input
-			if focused {
-				s = styles.InputFocus
-			}
-			valueStr = s.Render(field.Input.View())
+			// Do NOT wrap textinput.View() in any lipgloss style — even a plain
+			// Render() call processes ANSI internally and strips the ESC byte from
+			// the cursor sequence (\x1b[7m), leaving "[7m [0m" as literal text.
+			// Focus is already visible via the label colour and the cursor itself.
+			valueStr = field.Input.View()
 		case FieldSelect:
 			val := ""
 			if len(field.Options) > 0 {
@@ -305,11 +313,25 @@ func (f *FormModel) View() string {
 			if focused {
 				s = styles.InputFocus
 			}
-			valueStr = s.Render(check + " " + field.Label)
-			label = ""
+			// Toggle renders its own label inside the box — no separate label column.
+			sb.WriteString(s.Render(check+" "+field.Label))
+			if field.Error != "" {
+				sb.WriteString(" " + styles.Error.Render(field.Error))
+			}
+			sb.WriteString("\n")
+			continue
 		}
 
-		sb.WriteString(label + valueStr)
+		// Pad label text to max width BEFORE applying ANSI styles so columns stay aligned.
+		labelText := fmt.Sprintf("%-*s", maxLabel, field.Label+":")
+		var label string
+		if focused {
+			label = lipgloss.NewStyle().Foreground(lipgloss.Color("#4a90d9")).Bold(true).Render(labelText)
+		} else {
+			label = styles.Faint.Render(labelText)
+		}
+
+		sb.WriteString(label + " " + valueStr)
 		if field.Error != "" {
 			sb.WriteString(" " + styles.Error.Render(field.Error))
 		}

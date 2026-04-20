@@ -48,6 +48,18 @@ func (m *InstallmentsModel) OnInstallmentsLoaded(msg InstallmentsLoadedMsg) {
 	m.installments = msg.Installments
 }
 
+func (m InstallmentsModel) Capturing() bool { return m.mode != installmentsModeList }
+
+func (m InstallmentsModel) Hints() string {
+	switch m.mode {
+	case installmentsModeAdd:
+		return "Tab next field  Enter create  Esc cancel"
+	case installmentsModeDelete:
+		return "y confirm  n cancel"
+	}
+	return "[n] new  [d] delete  [↑/↓] navigate"
+}
+
 func (m InstallmentsModel) Update(msg tea.Msg) (InstallmentsModel, tea.Cmd) {
 	switch m.mode {
 	case installmentsModeAdd:
@@ -83,11 +95,11 @@ func (m InstallmentsModel) Update(msg tea.Msg) (InstallmentsModel, tea.Cmd) {
 				m.mode = installmentsModeDelete
 			}
 			return m, nil
-		case "j":
+		case "j", "down":
 			if m.cursor < len(m.installments)-1 {
 				m.cursor++
 			}
-		case "k":
+		case "k", "up":
 			if m.cursor > 0 {
 				m.cursor--
 			}
@@ -151,54 +163,52 @@ func (m InstallmentsModel) updateDelete(msg tea.Msg) (InstallmentsModel, tea.Cmd
 }
 
 func (m InstallmentsModel) View() string {
-	if m.mode == installmentsModeAdd {
-		return m.addForm.View()
-	}
-
 	var sb strings.Builder
-	sb.WriteString(styles.Faint.Render("[n] New  [d] Delete  [j/k] Navigate") + "\n\n")
 
 	if len(m.installments) == 0 {
 		sb.WriteString(styles.Faint.Render("No installments yet. Press [n] to create one.") + "\n")
-		return sb.String()
-	}
+	} else {
+		for i, inst := range m.installments {
+			prefix := "  "
+			if i == m.cursor {
+				prefix = "▶ "
+			}
+			paid := int64(0)
+			if inst.PaidCount != nil {
+				paid = *inst.PaidCount
+			}
+			monthly := 0.0
+			if inst.MonthlyVal != nil {
+				monthly = *inst.MonthlyVal
+			}
+			total := inst.NInstallments
+			barFilled := int(paid)
+			barEmpty := int(total) - barFilled
+			if barEmpty < 0 {
+				barEmpty = 0
+			}
+			bar := styles.RevenueText.Render(strings.Repeat("█", barFilled)) +
+				styles.Faint.Render(strings.Repeat("░", barEmpty))
 
-	for i, inst := range m.installments {
-		prefix := "  "
-		if i == m.cursor {
-			prefix = "▶ "
+			sb.WriteString(fmt.Sprintf("%s%-24s %-12s %s×%d  %s %d/%d  %s\n",
+				prefix,
+				truncate(inst.Desc, 24),
+				truncate(inst.Cat, 12),
+				format.Currency(monthly),
+				total,
+				bar,
+				paid, total,
+				styles.Faint.Render(format.DateDisplay(inst.StartDate)),
+			))
 		}
-		paid := int64(0)
-		if inst.PaidCount != nil {
-			paid = *inst.PaidCount
-		}
-		monthly := 0.0
-		if inst.MonthlyVal != nil {
-			monthly = *inst.MonthlyVal
-		}
-		total := inst.NInstallments
-		barFilled := int(paid)
-		barEmpty := int(total) - barFilled
-		if barEmpty < 0 {
-			barEmpty = 0
-		}
-		bar := styles.RevenueText.Render(strings.Repeat("█", barFilled)) +
-			styles.Faint.Render(strings.Repeat("░", barEmpty))
-
-		line := fmt.Sprintf("%s%-24s %-12s %s×%d  %s %d/%d  %s",
-			prefix,
-			truncate(inst.Desc, 24),
-			truncate(inst.Cat, 12),
-			format.Currency(monthly),
-			total,
-			bar,
-			paid, total,
-			styles.Faint.Render(format.DateDisplay(inst.StartDate)),
-		)
-		if m.mode == installmentsModeDelete && i == m.cursor {
-			line += "\n" + m.confirm.View()
-		}
-		sb.WriteString(line + "\n")
 	}
-	return sb.String()
+	bg := sb.String()
+
+	switch m.mode {
+	case installmentsModeAdd:
+		return components.RenderModal(m.addForm.View(), m.width, m.height)
+	case installmentsModeDelete:
+		return components.RenderModal(m.confirm.View(), m.width, m.height)
+	}
+	return bg
 }
