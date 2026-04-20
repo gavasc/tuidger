@@ -37,9 +37,7 @@ jobs:
             -o tuidger_linux_${{ matrix.goarch }} .
 
       - name: Install nfpm
-        run: |
-          curl -sSfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh \
-            | sh -s -- -b /usr/local/bin
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
 
       - name: Build .deb
         env:
