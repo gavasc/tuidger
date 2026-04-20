@@ -9,6 +9,9 @@ tuidger
 *.db-shm
 *.db-wal
 
+# packaging output
+dist/
+
 # go build cache
 *.test
 *.out

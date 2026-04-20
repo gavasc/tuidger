@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        include:
+          - goarch: amd64
+            nfpm_arch: amd64
+          - goarch: arm64
+            nfpm_arch: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build binary
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          go build -ldflags "-s -w -X main.version=${VERSION}" \
+            -o tuidger_linux_${{ matrix.goarch }} .
+
+      - name: Install nfpm
+        run: |
+          curl -sSfL https://install.goreleaser.com/github.com/goreleaser/nfpm.sh \
+            | sh -s -- -b /usr/local/bin
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          cp tuidger_linux_${{ matrix.goarch }} tuidger
+          VERSION=${VERSION} ARCH=${{ matrix.nfpm_arch }} \
+            nfpm package --packager deb \
+              --target dist/ \
+              --config packaging/nfpm.yaml
+          rm tuidger
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.goarch }}
+          path: |
+            tuidger_linux_${{ matrix.goarch }}
+            dist/*.deb
+
+  publish:
+    needs: release
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

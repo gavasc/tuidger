@@ -12,7 +12,14 @@ import (
 	"github.com/gavasc/tuidger/internal/views"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) == 2 && (os.Args[1] == "--version" || os.Args[1] == "-v") {
+		fmt.Println("tuidger", version)
+		return
+	}
+
 	dbPath := resolveDBPath()
 
 	d, err := db.Open(dbPath)

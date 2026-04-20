@@ -1,0 +1,11 @@
+name: tuidger
+arch: amd64
+platform: linux
+version: "${VERSION}"
+maintainer: Gabriel Vasconcelos <gavasc@proton.me>
+description: Terminal personal finance manager
+homepage: https://github.com/gavasc/tuidger
+license: MIT
+contents:
+  - src: ./tuidger
+    dst: /usr/local/bin/tuidger
