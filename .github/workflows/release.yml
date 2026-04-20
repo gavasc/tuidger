@@ -134,16 +134,17 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
+          chmod 700 ~/.ssh
+          echo "$AUR_SSH_PRIVATE_KEY" > ~/.ssh/aur
           chmod 600 ~/.ssh/aur
-          ssh-keyscan -t ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
+          ssh-keyscan -t rsa,ecdsa,ed25519 aur.archlinux.org >> ~/.ssh/known_hosts
 
           git config --global user.name "gavasc"
           git config --global user.email "gavasc@proton.me"
 
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" \
-            git clone ssh://aur@aur.archlinux.org/tuidger.git /tmp/aur
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/aur -o IdentitiesOnly=yes"
 
+          git clone ssh://aur@aur.archlinux.org/tuidger.git /tmp/aur
           cp packaging/PKGBUILD /tmp/aur/PKGBUILD
           cp /tmp/.SRCINFO /tmp/aur/.SRCINFO
 
@@ -151,4 +152,4 @@ jobs:
           git add PKGBUILD .SRCINFO
           git diff --cached --quiet && echo "Nothing to update" && exit 0
           git commit -m "Update to ${VERSION}"
-          GIT_SSH_COMMAND="ssh -i ~/.ssh/aur" git push
+          git push
