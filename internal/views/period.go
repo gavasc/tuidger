@@ -60,20 +60,22 @@ func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 
 		// [ cycles backward through presets, ] cycles forward
 		case "[":
-			if p.mode == modeCustom {
-				return p, nil
-			}
 			idx := int(p.mode)
-			idx = (idx - 1 + len(presetModes)) % len(presetModes)
+			if p.mode == modeCustom {
+				idx = 0
+			} else {
+				idx = (idx - 1 + len(presetModes)) % len(presetModes)
+			}
 			p.setMode(presetModes[idx])
 			return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
 
 		case "]":
-			if p.mode == modeCustom {
-				return p, nil
-			}
 			idx := int(p.mode)
-			idx = (idx + 1) % len(presetModes)
+			if p.mode == modeCustom {
+				idx = 0
+			} else {
+				idx = (idx + 1) % len(presetModes)
+			}
 			p.setMode(presetModes[idx])
 			return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
 
