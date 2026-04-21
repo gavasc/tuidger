@@ -22,13 +22,23 @@ No CGO. No system libraries. The SQLite driver (`modernc.org/sqlite`) is pure Go
 
 ## Install
 
+**Arch Linux (AUR)**
+
+```bash
+yay -S tuidger
+```
+
+Or with any other AUR helper (`paru`, `aura`, etc.). The package builds from source — `go` is the only build dependency.
+
+**From source**
+
 ```bash
 git clone https://codeberg.org/gavasc/tuidger.git
 cd tuidger
 go build -o tuidger .
 ```
 
-Or install directly:
+**Go toolchain**
 
 ```bash
 go install github.com/gavasc/tuidger@latest
