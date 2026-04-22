@@ -20,8 +20,10 @@ const (
 	modeCustom
 )
 
-var presetModes = []periodMode{mode1m, mode3m, mode6m, mode1y}
-var modeNames = []string{"1m", "3m", "6m", "1y"}
+var (
+	presetModes = []periodMode{mode1m, mode3m, mode6m, mode1y}
+	modeNames   = []string{"1m", "3m", "6m", "1y"}
+)
 
 type PeriodModel struct {
 	mode        periodMode
@@ -79,8 +81,7 @@ func (p PeriodModel) Update(msg tea.Msg) (PeriodModel, tea.Cmd) {
 			p.setMode(presetModes[idx])
 			return p, func() tea.Msg { return PeriodChangedMsg{From: p.From, To: p.To} }
 
-
-		case "p":
+		case "P":
 			// Open the custom date editor (re-open if already in custom mode)
 			p.mode = modeCustom
 			p.editing = true
@@ -206,7 +207,7 @@ func (p PeriodModel) View() string {
 	if p.mode == modeCustom {
 		modeLabel = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#4a90d9")).Render("custom")
 	} else {
-		modeLabel = styles.Faint.Render("[p]custom")
+		modeLabel = styles.Faint.Render("[P]custom")
 	}
 
 	modeBar := strings.Join(parts, styles.Faint.Render(" | ")) + "  " + modeLabel
